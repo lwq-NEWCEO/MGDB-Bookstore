@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - lwq # 当代码推送到 lwq 分支时触发此工作流
-      
 
 env:
   PYTHON_VERSION: '3.9' # 可以根据您的项目需求调整 Python 版本
@@ -13,7 +12,6 @@ jobs:
   test_coverage: # 作业名称，反映其目的
     runs-on: ubuntu-latest # 在 Ubuntu 系统的最新版本上运行
     environment: MGDB    # 如果您的测试需要访问 MGDB 环境中的 secrets 或 variables，请保留此行
-                      # 如果不需要，您可以删除此行。
 
     # --- 配置 MongoDB 服务 ---
     services:
@@ -21,9 +19,6 @@ jobs:
         image: mongo:4.4 # 使用 MongoDB 4.4 版本，您可以根据您的项目需求调整版本
         ports:
           - 27017:27017 # 将容器的 27017 端口映射到主机的 27017 端口
-        # options: # 可以添加一些 Docker 运行选项，例如限制内存或 CPU
-        #   --memory 1024m
-        #   --cpus 1
 
     steps:
     - name: Checkout code # 步骤1: 检出仓库代码
@@ -38,11 +33,9 @@ jobs:
       # 此步骤将在 'bookstore_MGDB' 目录下执行
       run: |
         python -m pip install --upgrade pip
-        # 安装您的项目依赖 (requirements.txt 在当前工作目录即 bookstore_MGDB 下)
-        pip install -r requirements.txt # <-- 重要：路径已简化，因为工作目录已更改
-        # 安装测试和覆盖率工具，并确保安装 pymongo
+        pip install -r requirements.txt
         pip install pytest coverage pymongo
-      working-directory: bookstore_MGDB # <-- **核心修改点**：将工作目录设置为 bookstore_MGDB
+      working-directory: bookstore_MGDB # <-- 保持工作目录一致
 
     - name: Wait for MongoDB to start # 步骤4: 等待 MongoDB 启动
       # 此步骤也将在 'bookstore_MGDB' 目录下执行
@@ -54,27 +47,55 @@ jobs:
           sleep 1
         done
         nc -zv localhost 27017 || (echo "Error: MongoDB failed to start or respond after multiple retries." && exit 1)
-      working-directory: bookstore_MGDB # <-- **核心修改点**：保持工作目录一致
+      working-directory: bookstore_MGDB # <-- 保持工作目录一致
 
     - name: Run Tests with Coverage # 步骤5: 运行测试并生成覆盖率报告
-      # 此步骤也将在 'bookstore_MGDB' 目录下执行
+      # 此步骤将在 'bookstore_MGDB' 目录下执行
       run: |
-        # 因为 working-directory 已经设置为 bookstore_MGDB，所以无需再 cd
-        # 设置 PYTHONPATH，确保 fe 和 be 模块可以被 pytest 和 coverage 找到
-        # $(pwd) 现在会是 /home/runner/work/MGDB-Bookstore/MGDB-Bookstore/bookstore_MGDB 的完整路径
-        export PYTHONPATH=$(pwd):$PYTHONPATH
+        # 禁用shell的'exit on error'行为，以便我们可以手动检查每个命令的退出状态
+        # 这样即使coverage命令因无数据而返回非零，我们也能控制整个步骤的退出状态。
+        set +e
 
-        # 运行 coverage 和 pytest 命令
-        # pytest 命令现在是相对于 bookstore_MGDB 目录执行的
+        export PYTHONPATH=$(pwd):$PYTHONPATH
+        echo "--- Running pytest with coverage ---"
+
+        # 运行 pytest 并收集覆盖率数据
         coverage run --timid --branch --source fe,be --concurrency=thread -m pytest -v --ignore=fe/data
-        coverage combine
-        coverage report
-        coverage html
-      working-directory: bookstore_MGDB # <-- **核心修改点**：将工作目录设置为 bookstore_MGDB
+        pytest_exit_code=$? # 获取上一个命令 (coverage run) 的退出状态
+
+        # 检查 pytest 是否成功（pytest成功时返回0）
+        if [ "$pytest_exit_code" -ne 0 ]; then
+          echo "Error: Pytest tests failed with exit code $pytest_exit_code."
+          echo "Please check the test logs for failures."
+          exit "$pytest_exit_code" # 如果测试失败，则整个步骤也应该失败
+        fi
+
+        echo "--- Pytest tests passed successfully. Processing coverage data... ---"
+
+        # 检查是否生成了 .coverage 数据文件 (或任何以 .coverage 开头的文件)
+        # 'ls .coverage*' 会列出所有匹配的文件，'1> /dev/null 2>&1' 隐藏输出
+        if ls .coverage* 1> /dev/null 2>&1; then
+          echo "Coverage data file(s) found. Combining and reporting..."
+          # 运行 coverage 命令，即使它们可能因数据为空而发出警告，我们不希望它们导致整个步骤失败
+          coverage combine || echo "Warning: coverage combine command failed, but proceeding."
+          coverage report || echo "Warning: coverage report command failed, but proceeding."
+          coverage html || echo "Warning: coverage html command failed, but proceeding."
+          echo "--- Coverage reporting complete ---"
+        else
+          echo "--- Warning: No .coverage data file found after running tests. Skipping coverage reporting. ---"
+          echo "请检查您的 '--source fe,be' 参数是否正确，以及测试是否实际执行了这些模块中的代码。"
+        fi
+
+        # 确保此步骤最终以成功状态 (exit 0) 结束，因为所有测试都通过了。
+        # 如果 pytest 之前失败，我们已经通过 exit "$pytest_exit_code" 退出了。
+        exit 0
+      working-directory: bookstore_MGDB # <-- 保持工作目录一致
 
     - name: Upload coverage report (Optional) # 步骤6: 上传生成的 HTML 覆盖率报告
       uses: actions/upload-artifact@v4
       with:
         name: coverage-html-report # 上传的 artifact 名称
-        # path 现在是相对于 github.workspace (仓库根目录)，所以需要包含 bookstore_MGDB
         path: bookstore_MGDB/htmlcov/
+      # 仅当 htmlcov 目录存在时才上传。`coverage html` 即使没有数据也会创建此目录，
+      # 但如果前面的步骤因其他原因被跳过或未创建，这个条件可以避免失败。
+      if: success() && steps.test_coverage.outcome == 'success' && -d 'bookstore_MGDB/htmlcov' # Check if directory exists
