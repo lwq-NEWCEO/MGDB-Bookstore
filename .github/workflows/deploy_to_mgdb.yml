@@ -14,6 +14,16 @@ jobs:
     environment: MGDB    # 如果您的测试需要访问 MGDB 环境中的 secrets 或 variables，请保留此行
                       # 如果不需要，您可以删除此行。
 
+    # --- 新增：配置 MongoDB 服务 ---
+    services:
+      mongodb:
+        image: mongo:4.4 # 使用 MongoDB 4.4 版本，您可以根据您的项目需求调整版本
+        ports:
+          - 27017:27017 # 将容器的 27017 端口映射到主机的 27017 端口
+        # options: # 可以添加一些 Docker 运行选项，例如限制内存或 CPU
+        #   --memory 1024m
+        #   --cpus 1
+
     steps:
     - name: Checkout code # 步骤1: 检出仓库代码
       uses: actions/checkout@v4
@@ -23,14 +33,31 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install dependencies (pytest, coverage, and project deps) # 步骤3: 安装所有依赖
+    - name: Install dependencies (pytest, coverage, pymongo, and project deps) # 步骤3: 安装所有依赖
       run: |
         python -m pip install --upgrade pip
         # 安装您的项目依赖 (requirements.txt 在 bookstore_MGDB 文件夹下)
         pip install -r bookstore_MGDB/requirements.txt
-        # 安装测试和覆盖率工具
-        pip install pytest coverage
+        # 安装测试和覆盖率工具，并确保安装 pymongo
+        pip install pytest coverage pymongo
       working-directory: ${{ github.workspace }} # 确保从仓库根目录执行，以便正确找到 bookstore_MGDB/requirements.txt
+
+    # --- 新增：等待 MongoDB 启动 ---
+    - name: Wait for MongoDB to start
+      # netcat (nc) 命令用于检查端口是否开放
+      # Ubuntu 运行器默认包含 netcat
+      run: |
+        echo "Waiting for MongoDB to become ready on localhost:27017..."
+        # 尝试连接 localhost:27017，最多重试 20 次，每次间隔 1 秒
+        # 这给了 MongoDB 足够的时间来完全启动
+        for i in $(seq 1 20); do
+          nc -zv localhost 27017 && echo "MongoDB is ready!" && break
+          echo "MongoDB not ready yet, retrying in 1 second... (Attempt $i/20)"
+          sleep 1
+        done
+        # 如果 20 次重试后仍未成功，则强制失败
+        nc -zv localhost 27017 || (echo "Error: MongoDB failed to start or respond after multiple retries." && exit 1)
+      # MongoDB 服务启动和就绪可能需要一点时间，所以这个等待步骤非常重要。
 
     - name: Run Tests with Coverage # 步骤4: 运行测试并生成覆盖率报告
       run: |
@@ -42,6 +69,7 @@ jobs:
         export PYTHONPATH=$(pwd):$PYTHONPATH
 
         # 运行 coverage 和 pytest 命令
+        # 现在，您的测试代码应该能够连接到 localhost:27017 上的 MongoDB 服务
         coverage run --timid --branch --source fe,be --concurrency=thread -m pytest -v --ignore=fe/data
         coverage combine
         coverage report
