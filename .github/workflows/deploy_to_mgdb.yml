@@ -1,0 +1,63 @@
+name: Run Tests Only (No Coverage Reporting) # 工作流名称已修改，反映其新目的
+
+on:
+  push:
+    branches:
+      - lwq # 当代码推送到 lwq 分支时触发此工作流
+
+env:
+  PYTHON_VERSION: '3.9' # 可以根据您的项目需求调整 Python 版本
+
+jobs:
+  test_only: # 作业名称已修改，反映其新目的
+    runs-on: ubuntu-latest # 在 Ubuntu 系统的最新版本上运行
+    environment: MGDB    # 如果您的测试需要访问 MGDB 环境中的 secrets 或 variables，请保留此行
+
+    # --- 配置 MongoDB 服务 ---
+    services:
+      mongodb:
+        image: mongo:4.4 # 使用 MongoDB 4.4 版本，您可以根据您的项目需求调整版本
+        ports:
+          - 27017:27017 # 将容器的 27017 端口映射到主机的 27017 端口
+
+    steps:
+    - name: Checkout code # 步骤1: 检出仓库代码
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ env.PYTHON_VERSION }} # 步骤2: 设置 Python 环境
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies (pytest, pymongo, and project deps) # 步骤3: 安装所有依赖
+      # 此步骤将在 'bookstore_MGDB' 目录下执行
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pymongo # <-- 注意：这里不再需要安装 coverage，因为它不再使用
+      working-directory: bookstore_MGDB # <-- 确保工作目录设置为 bookstore_MGDB
+
+    - name: Wait for MongoDB to start # 步骤4: 等待 MongoDB 启动
+      # 此步骤也将在 'bookstore_MGDB' 目录下执行
+      run: |
+        echo "Waiting for MongoDB to become ready on localhost:27017..."
+        for i in $(seq 1 20); do
+          nc -zv localhost 27017 && echo "MongoDB is ready!" && break
+          echo "MongoDB not ready yet, retrying in 1 second... (Attempt $i/20)"
+          sleep 1
+        done
+        nc -zv localhost 27017 || (echo "Error: MongoDB failed to start or respond after multiple retries." && exit 1)
+      working-directory: bookstore_MGDB # <-- 保持工作目录一致
+
+    - name: Run Pytest Tests # 步骤5: 仅运行 Pytest 测试 (不进行覆盖率报告)
+      # 此步骤将在 'bookstore_MGDB' 目录下执行
+      run: |
+        export PYTHONPATH=$(pwd):$PYTHONPATH
+        echo "--- Running pytest tests ---"
+
+        # 仅执行 pytest 命令，不再包含 coverage run
+        # 如果 pytest 发现测试失败，它将返回非零退出代码，导致此步骤失败
+        pytest -v --ignore=fe/data
+
+        echo "--- Pytest tests complete ---"
+      working-directory: bookstore_MGDB 
