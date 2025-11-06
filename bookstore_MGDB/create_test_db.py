@@ -115,6 +115,6 @@ if os.path.exists(test_db_path):
         print("  2. 确保您的 '.gitignore' 包含了 'fe/data/book.db'，以避免提交原始大文件。")
         print("  3. 在您的测试代码或 GitHub Actions 工作流中，将数据库连接路径更新为 'fe/data/test_book.db'。")
 else:
-    print("\n错误: 测试数据库文件未成功创建。请检查上面的错误信息。")
+    print("\n错误: 测试数据库文件未成功创建，请检查上面的错误信息。")
     sys.exit(1)
 
